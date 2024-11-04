@@ -1,5 +1,8 @@
 import numpy as np
 from scipy.integrate import solve_ivp
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+import os
 
 class PrngOscillator:
     def __init__(self):
@@ -11,7 +14,7 @@ class PrngOscillator:
             'vk': -75.0,
             'vL': -40.0,
             'vc': 100.0,
-            'kc': 3.3/18.0,
+            'kc': 3.3 / 18.0,
             'rao': 0.27,
             'lamn': 230.0,
             'gkc': 12.0,
@@ -22,33 +25,35 @@ class PrngOscillator:
             'ohm1': 1.414,
             'ohm2': 0.618
         }
-        
-        self.initial_state = [0.1, 0.1, 0.1, 0.1]
+
+        # Use entropy for the initial state
+        entropy = os.urandom(32)  # Get 32 bytes of secure random bytes
+        self.initial_state = [(b % 100) / 100.0 for b in entropy[:4]]  # Normalize to [0, 1]
 
     def system_equations(self, t, v):
         x1, y1, z1, w1 = v
         p = self.params
-        
+
         phi_ext = p['E'] * (np.sin(p['ohm1'] * t) + np.sin(p['ohm2'] * t))
         mp = np.tanh(w1)
-        
-        tau_n, n_inf, h_inf, m_inf = 1, 0.5, 0.5, 0.5  # Simplified placeholder
-        
-        dx1 = (p['g1'] * m_inf**3 * h_inf * (p['v1'] - x1) + 
-               p['gkv'] * y1**4 * (p['vk'] - x1) + 
-               p['gkc'] * (z1/(1+z1)) * (p['vk'] - x1) + 
-               p['gL'] * (p['vL'] - x1) - 
-               p['k0'] * mp * x1)
-        
+
+        tau_n, n_inf, h_inf, m_inf = 1, 0.5, 0.5, 0.5  
+
+        dx1 = (p['g1'] * m_inf**3 * h_inf * (p['v1'] - x1) +
+                p['gkv'] * y1**4 * (p['vk'] - x1) +
+                p['gkc'] * (z1/(1 + z1)) * (p['vk'] - x1) +
+                p['gL'] * (p['vL'] - x1) -
+                p['k0'] * mp * x1)
+
         dy1 = (n_inf - y1) / tau_n
         dz1 = (m_inf**3 * h_inf * (p['vc'] - x1) - p['kc'] * z1) * p['rao']
         dw1 = p['k1'] * x1 - p['k2'] * w1 + phi_ext
-        
+
         return [dx1, dy1, dz1, dw1]
 
     def simulate(self, t_span, dt=0.01, transient_time=1000.0):
         t_eval = np.arange(t_span[0], t_span[1], dt)
-        
+
         solution = solve_ivp(
             self.system_equations,
             t_span,
@@ -58,7 +63,7 @@ class PrngOscillator:
             rtol=1e-9,
             atol=1e-9
         )
-        
+
         transient_points = int(transient_time / dt)
         return solution.t[transient_points:], solution.y[:, transient_points:]
 
@@ -68,19 +73,38 @@ class PrngOscillator:
             chaotic_value = trajectory[0][i % len(trajectory[0])]
             bit = 1 if chaotic_value > 0 else 0
             bits.append(bit)
-        
+
         return np.array(bits)
 
     def lfsr_post_processing(self, bits, taps=(0, 2, 3, 5)):
         lfsr_bits = []
-        state = bits[:8].tolist()  
+        state = bits[:8].tolist()
 
         for bit in bits:
             feedback = sum(state[t] for t in taps) % 2
-            lfsr_bits.append(state.pop(0))  
-            state.append(feedback)          
-            
+            lfsr_bits.append(state.pop(0))
+            state.append(feedback)
+
         return np.array(lfsr_bits)
+
+def encrypt_text(plaintext, key):
+    iv = os.urandom(16)
+
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    padded_text = pad(plaintext.encode('utf-8'), AES.block_size)
+    ciphertext = cipher.encrypt(padded_text)
+
+    print("IV:", iv) 
+    return iv + ciphertext
+
+def decrypt_text(encrypted_data, key):
+    iv = encrypted_data[:16]
+    ciphertext = encrypted_data[16:]  
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    decrypted_padded = cipher.decrypt(ciphertext)
+    decrypted_text = unpad(decrypted_padded, AES.block_size)
+
+    return decrypted_text.decode('utf-8')
 
 def main():
     mhho_prng = PrngOscillator()
@@ -89,10 +113,24 @@ def main():
     _, trajectory = mhho_prng.simulate(t_span)
     
     random_bits = mhho_prng.generate_prng_bits(trajectory)
-    print("Raw PRNG bits:","generated of length:",len(random_bits), random_bits,)
-    
     lfsr_bits = mhho_prng.lfsr_post_processing(random_bits)
-    print("LFSR-enhanced PRNG bits:",len(lfsr_bits),lfsr_bits)
+    
+    entropy = os.urandom(16)
+    entropy_bits = np.frombuffer(entropy, dtype=np.uint8).reshape(-1) % 2 
 
+    extended_entropy_bits = np.tile(entropy_bits, 8)[:128]
+
+    mixed_bits = (lfsr_bits + extended_entropy_bits) % 2
+    key = bytes(int(''.join(map(str, mixed_bits[i:i + 8])), 2) for i in range(0, 128, 8))
+
+    print("Key bits:", mixed_bits) 
+    plaintext = "This is a secret message."
+    print("Original plaintext:", plaintext)
+
+    encrypted_data = encrypt_text(plaintext, key)
+    print("Encrypted data (bytes):", encrypted_data)
+
+    decrypted_text = decrypt_text(encrypted_data, key)
+    print("Decrypted plaintext:", decrypted_text)
 if __name__ == "__main__":
     main()
