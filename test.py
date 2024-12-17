@@ -4,7 +4,7 @@ from PIL import Image
 import io
 import base64
 # Base URL for the Flask server
-BASE_URL = 'http://localhost:5000'
+BASE_URL = 'http://127.0.0.1:5000'
 
 
 def test_health_endpoint():

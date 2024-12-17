@@ -15,7 +15,7 @@ from scipy.stats import chisquare, pearsonr
 import requests
 from io import BytesIO
 app = Flask(__name__)
-CORS(app)
+CORS(app, expose_headers=["X-Encryption-Key"])  # Allow access to custom headers
 
 class PrngOscillator:
     def __init__(self):
@@ -75,6 +75,7 @@ class PrngOscillator:
             state.append(feedback)
         return np.array(lfsr_bits)
 def encrypt_image(image_bytes, key):
+    breakpoint()
     img = Image.open(io.BytesIO(image_bytes))
     img_buffer = io.BytesIO()
     img.save(img_buffer, format=img.format or "PNG")
@@ -89,6 +90,7 @@ def encrypt_image(image_bytes, key):
     return encrypted_data
 
 def decrypt_image(encrypted_data, key):
+    breakpoint()
     iv, ciphertext = encrypted_data[:16], encrypted_data[16:]
     cipher = AES.new(key, AES.MODE_CBC, iv)
     decrypted_padded = cipher.decrypt(ciphertext)
@@ -175,7 +177,6 @@ def simulate_system():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/generate-key', methods=['POST'])
 def generate_encryption_key():
     try:
         # Simulate to get initial random bits
@@ -193,15 +194,16 @@ def generate_encryption_key():
             int("".join(map(str, mixed_bits[i : i + 8])), 2) for i in range(0, 128, 8)
         )
         
-        return jsonify({
+        return {
             "key": key.hex(),
             "randomness_test": test_randomness(mixed_bits)
-        })
+        }
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return {"error": str(e)}
 
 @app.route('/encrypt-image', methods=['POST'])
 def encrypt_image_endpoint():
+    breakpoint()
     try:
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
@@ -210,15 +212,12 @@ def encrypt_image_endpoint():
         image_file = request.files['image']
         image_bytes = image_file.read()
 
-        key_response = requests.post(f"http://127.0.0.1:5000/generate-key")
+        key_response = generate_encryption_key()
         
-        if key_response.status_code == 200:
-            key_data = key_response.json() 
-            key_hex = key_data['key']  
-            key = bytes.fromhex(key_hex)
-        else:
-            return jsonify({"error": f"Failed to generate key. Status code: {key_response.status_code}"}), 500
-
+        
+        key_data = key_response 
+        key_hex = key_data['key']  
+        key = bytes.fromhex(key_hex)
         encrypted_data = encrypt_image(image_bytes, key)
         data_length = len(encrypted_data)
 
@@ -238,14 +237,17 @@ def encrypt_image_endpoint():
             as_attachment=True,
             download_name='encrypted_image.png'
         )
-
+        print(key.hex())
         # Set custom headers on the response
         response.headers["X-Encryption-Key"] = key.hex()
         response.headers["X-Data-Length"] = str(data_length)
+        print(response.headers)
 
         return response
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
 @app.route('/decrypt-image', methods=['POST'])
 def decrypt_image_endpoint():
     try:
@@ -267,6 +269,8 @@ def decrypt_image_endpoint():
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
 @app.route('/corr-calc', methods=['POST'])
 def correlation_calculation():
     try:
