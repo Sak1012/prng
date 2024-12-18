@@ -12,7 +12,11 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
 from PIL import Image, ImageChops
 from scipy.integrate import solve_ivp
-from scipy.stats import chisquare, pearsonr
+from scipy.stats import chisquare, pearsonr, entropy
+from skimage.io import imread
+from skimage.color import rgb2gray
+from skimage.util import img_as_ubyte
+from skimage.transform import resize
 import requests
 from io import BytesIO
 app = Flask(__name__)
@@ -154,31 +158,6 @@ def calculate_image_correlations(original_data, cipher_data):
     return vert_cor, hor_cor, diag_cor
 
 mhho_prng = PrngOscillator()
-
-@app.route('/simulate', methods=['POST'])
-def simulate_system():
-    """Simulate the chaotic system and generate random bits"""
-    try:
-        t_span = request.json.get('t_span', (0, 2000))
-        start_time = time.time()
-        _, trajectory = mhho_prng.simulate(t_span)
-        rng_time = time.time() - start_time
-        
-        # Generate random bits
-        random_bits = mhho_prng.generate_prng_bits(trajectory)
-        lfsr_bits = mhho_prng.lfsr_post_processing(random_bits)
-        
-        # Perform randomness test
-        randomness_test = test_randomness(lfsr_bits)
-        
-        return jsonify({
-            "random_bits": lfsr_bits.tolist(),
-            "simulation_time": rng_time,
-            "randomness_test": randomness_test
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 def generate_encryption_key():
     try:
         # Simulate to get initial random bits
@@ -202,6 +181,14 @@ def generate_encryption_key():
         }
     except Exception as e:
         return {"error": str(e)}
+@app.route("/generate-key")
+def key_gen():
+    key_resp = generate_encryption_key()
+    key_hex =key_resp['key']  
+    key = bytes.fromhex(key_hex)
+    return jsonify({
+        "key" : f"{key.hex()}"
+    })
 
 @app.route('/encrypt-image', methods=['POST'])
 def encrypt_image_endpoint():
@@ -209,16 +196,13 @@ def encrypt_image_endpoint():
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
         
-        # Read the image file
         image_file = request.files['image']
-        image_bytes = image_file.read()
-
-        key_response = generate_encryption_key()
-        
-        
-        key_data = key_response 
-        key_hex = key_data['key']  
-        key = bytes.fromhex(key_hex)
+        key = request.form["key"]  
+        image_bytes = image_file.read() 
+        hex_int = int(key, 16) 
+        new_int = hex_int + 0x200
+        key = hex(new_int)[2:] 
+        key = bytes.fromhex(key)
         encrypted_data,iv = encrypt_image(image_bytes, key)
         data_length = len(encrypted_data)
 
@@ -239,8 +223,6 @@ def encrypt_image_endpoint():
             download_name='encrypted_image.png'
         )
         print(key.hex())
-        # Set custom headers on the response
-        response.headers["X-Encryption-Key"] = key.hex()
         response.headers['X-Iv'] = iv
         response.headers["X-Data-Length"] = str(data_length)
 
@@ -254,9 +236,14 @@ def encrypt_image_endpoint():
 @app.route('/decrypt-image', methods=['POST'])
 def decrypt_image_endpoint():
     try:
+        breakpoint()
         encrypted_file = request.files['file']
         key_hex = request.form['key']
+        print(key_hex)
         iv = request.form['iv']
+        hex_int = int(key, 16) 
+        new_int = hex_int + 0x200
+        key = hex(new_int)[2:] 
         key = bytes.fromhex(key_hex)
         encrypted_image = Image.open(encrypted_file)
         encrypted_pixels = encrypted_image.tobytes()
@@ -279,47 +266,66 @@ def decrypt_image_endpoint():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/corr-calc', methods=['POST'])
-def correlation_calculation():
-    try:
-        if 'original_image' not in request.files or 'encrypted_image' not in request.files:
-            return jsonify({"error": "Missing original or decrypted image"}), 400
-        try:
-            original_file = request.files['original_image']
-            decrypted_file = request.files['encrypted_image']
-        
-            original_img = Image.open(original_file)
-            decrypted_img = Image.open(decrypted_file)
-            decrypted_img = decrypted_img.resize(original_img.size)
-            original_data = np.array(original_img)
-            decrypted_data = np.array(decrypted_img)
-        
-            vert_cor, hor_cor, diag_cor = calculate_image_correlations(original_data, decrypted_data)
-        
-            return jsonify({
-                "vertical_correlation": vert_cor,
-                "horizontal_correlation": hor_cor,
-                "diagonal_correlation": diag_cor
-            })
-        except:
-            return jsonify({
-                "vertical_correlation": "Not Applicable",
-                "horizontal_correlation": "Not Applicable",
-                "diagonal_correlation": "Not Applicable"
-            })
+def calculate_correlation(x, y):
+    """Compute Pearson correlation coefficient between two arrays."""
+    return np.corrcoef(x.flatten(), y.flatten())[0, 1]
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+def calculate_directions_correlation(image):
+    """Calculate horizontal, vertical, and diagonal correlations for an image."""
+    # Convert to grayscale if needed
+    if image.ndim == 3 and image.shape[2] == 4:  # Check for 4 channels (RGBA)
+        image = image[:, :, :3]  # Drop the alpha channel
+    if image.ndim == 3:  # RGB image
+        image = rgb2gray(image)
 
-# Add this helper function to calculate the correlation
-def calculate_correlation(original_data, comparison_data):
-    # Normalize the images (mean center the data)
-    original_flat = original_data.flatten()
-    comparison_flat = comparison_data.flatten()
+    # Ensure image is 2D
+    assert image.ndim == 2, "Image must be grayscale (2D)."
     
-    # Calculate correlation coefficient between the original and comparison data
-    correlation_matrix = np.corrcoef(original_flat, comparison_flat)
-    return float(correlation_matrix[0, 1])
+    # Shift operations to extract neighboring pixels
+    horizontal = calculate_correlation(image[:, :-1], image[:, 1:])  # Right neighbor
+    vertical = calculate_correlation(image[:-1, :], image[1:, :])    # Bottom neighbor
+    diagonal = calculate_correlation(image[:-1, :-1], image[1:, 1:]) # Bottom-right neighbor
+
+    return {
+        "hcorr": round(horizontal, 5),
+        "vcorr": round(vertical, 5),
+        "dcorr": round(diagonal, 5)
+    }
+
+@app.route('/corr-calc', methods=['POST'])
+def image_correlations():
+    """
+    POST Route to calculate horizontal, vertical, and diagonal correlations for two images.
+    Input: 'original' and 'cipher' image files
+    Output: JSON with correlation coefficients for both images
+    """
+    # Check if both images are provided
+    if 'original' not in request.files or 'cipher' not in request.files:
+        return jsonify({"error": "Both 'original' and 'cipher' images must be provided"}), 400
+
+    # Load images
+    original_file = request.files['original']
+    cipher_file = request.files['cipher']
+    
+    try:
+        original_image = imread(original_file)
+        cipher_image = imread(cipher_file)
+    except Exception as e:
+        return jsonify({"error": f"Failed to read images: {str(e)}"}), 400
+
+    try:
+        # Calculate correlations for each image
+        original_results = calculate_directions_correlation(original_image)
+        cipher_results = calculate_directions_correlation(cipher_image)
+        
+        # Prepare and return the response
+        response = {
+                "original": original_results,
+                "cipher": cipher_results
+        }
+        return jsonify(response)
+    except Exception as e:
+        return jsonify({"error": f"Error during calculation: {str(e)}"}), 500
 
 def compute_adjacent_pixel_difference(image, axis):
     """
@@ -343,12 +349,16 @@ def plot_pixel_distribution(image, title, row_index):
     plt.title(f"{title} (Horizontal)")
     plt.xlabel("Pixel Difference")
     plt.ylabel("Frequency")
-    
+    if title=="Original":
+        plt.ylim(0, 3500)  # Set y-axis limit to 3500
+
     plt.subplot(2, 3, row_index * 3 + 3)
     plt.hist(diff_vertical.flatten(), bins=256, color='purple')
     plt.title(f"{title} (Vertical)")
     plt.xlabel("Pixel Difference")
     plt.ylabel("Frequency")
+    if title=="Original":
+        plt.ylim(0, 3500)  # Set y-axis limit to 3500
 
 @app.route('/plot', methods=['POST'])
 def generate_plot():
@@ -356,11 +366,11 @@ def generate_plot():
     Generate the plot for the original and encrypted images.
     Accepts two images via POST request as 'original_image' and 'encrypted_image'.
     """
-    if 'original_image' not in request.files or 'encrypted_image' not in request.files:
+    if 'original' not in request.files or 'cipher' not in request.files:
         return jsonify({"error": "Missing original or decrypted image"}), 400
     
-    original_file = request.files['original_image']
-    encrypted_file = request.files['encrypted_image']
+    original_file = request.files['original']
+    encrypted_file = request.files['cipher']
         
     # Read images
     original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
@@ -420,11 +430,11 @@ def plot1():
     """
     try:
         breakpoint()
-        if 'original_image' not in request.files or 'encrypted_image' not in request.files:
+        if 'original' not in request.files or 'cipher' not in request.files:
             return jsonify({"error": "Missing original or decrypted image"}), 400
         
-        original_file = request.files['original_image']
-        encrypted_file = request.files['encrypted_image']
+        original_file = request.files['original']
+        encrypted_file = request.files['cipher']
         original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
         encrypted_image = cv2.imdecode(np.frombuffer(encrypted_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
         original_horizontal_x, original_horizontal_y = get_adjacent_pixel_pairs(original_image, axis=1)
@@ -460,10 +470,10 @@ def plot1():
 def compare_images_endpoint():
     """Compare two uploaded images"""
     try:
-        if 'original_image' not in request.files or 'decrypted_image' not in request.files:
+        if 'original' not in request.files or 'cipher' not in request.files:
             return jsonify({"error": "Missing original or decrypted image"}), 400
-        original_file = request.files['original_image']
-        decrypted_file = request.files['decrypted_image']
+        original_file = request.files['original']
+        decrypted_file = request.files['cipher']
         original_img = Image.open(original_file)
         decrypted_img = Image.open(decrypted_file)
         original_rgb = original_img
@@ -489,6 +499,138 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "message": "PRNG Oscillator Flask Server is running"
+    })
+def calculate_correlation(img1, img2):
+    """Compute Pearson correlation coefficient."""
+    img1_flat = img1.flatten()
+    img2_flat = img2.flatten()
+    return np.corrcoef(img1_flat, img2_flat)[0, 1]
+
+def calculate_entropy(image):
+    """Compute Shannon entropy."""
+    image = img_as_ubyte(image)  # Convert to 8-bit if necessary
+    histogram, _ = np.histogram(image, bins=256, range=(0, 256), density=True)
+    return entropy(histogram, base=2)
+from skimage.color import rgb2gray
+from skimage.io import imread
+
+def preprocess_image(image, target_shape=None):
+    """Ensure image is grayscale and resize to match target shape."""
+    if image.ndim == 3:
+        if image.shape[2] == 4:  # Handle RGBA images
+            image = image[:, :, :3]  # Drop alpha channel
+        image = rgb2gray(image)  # Convert to grayscale
+    
+    if target_shape:  # Resize if target shape is provided
+        image = resize(image, target_shape, anti_aliasing=True)
+    
+    return image
+
+@app.route('/corr-entropy', methods=['POST'])
+def image_stats():
+    # Load images from request
+
+    original = imread(request.files['original'])
+    cipher = imread(request.files['cipher'])
+    decrypted = imread(request.files['decrypted'])
+    target_shape = original.shape[:2]  
+    original = preprocess_image(original,target_shape)
+    cipher = preprocess_image(cipher,target_shape)
+    decrypted = preprocess_image(decrypted,target_shape)
+
+    # Convert to grayscale if needed
+    original_gray = rgb2gray(original) if original.ndim == 3 else original
+    cipher_gray = rgb2gray(cipher) if cipher.ndim == 3 else cipher
+    decrypted_gray = rgb2gray(decrypted) if decrypted.ndim == 3 else decrypted
+
+    # Compute values
+    correlation_plain_cipher = calculate_correlation(original_gray, cipher_gray)
+    correlation_plain_decrypted = calculate_correlation(original_gray, decrypted_gray)
+    entropy_plain = calculate_entropy(original_gray)
+    entropy_cipher = calculate_entropy(cipher_gray)
+
+    # Prepare response
+    response = {
+        "size": f"{original.shape[0]} × {original.shape[1]}",
+        "cc_plainvcipher": round(correlation_plain_cipher, 5),
+        "e_plain": round(entropy_plain, 4),
+        "e_cipher": round(entropy_cipher, 4),
+        "cc_plainvsdecrypt": round(correlation_plain_decrypted, 5)
+    }
+
+    return jsonify(response)
+
+@app.route('/corr-images', methods=['POST'])
+def corr_images():
+    # Load images from request
+
+    original = imread(request.files['original'])
+    cipher = imread(request.files['cipher'])
+    target_shape = original.shape[:2]  
+    original = preprocess_image(original,target_shape)
+    cipher = preprocess_image(cipher,target_shape)
+
+    # Convert to grayscale if needed
+    original_gray = rgb2gray(original) if original.ndim == 3 else original
+    cipher_gray = rgb2gray(cipher) if cipher.ndim == 3 else cipher
+
+    # Compute values
+    correlation_plain_cipher = calculate_correlation(original_gray, cipher_gray)
+
+    # Prepare response
+    response = {
+        "cc_plainvcipher": round(correlation_plain_cipher, 5),
+    }
+    return jsonify(response)
+
+def calculate_mse(original, encrypted):
+    return np.mean((original.astype("float") - encrypted.astype("float")) ** 2)
+
+def calculate_psnr(original, encrypted):
+    mse = calculate_mse(original, encrypted)
+    if mse == 0:
+        return float('inf')  # No difference between images
+    max_pixel = 255.0
+    return 20 * np.log10(max_pixel / np.sqrt(mse))
+
+def calculate_npcr(original, encrypted):
+    diff = np.abs(original - encrypted) > 0
+    return np.sum(diff) / float(original.size) * 100
+
+def calculate_uaci(original, encrypted):
+    diff = np.abs(original.astype("float") - encrypted.astype("float"))
+    return np.mean(diff) / 255 * 100
+def resize_images(original, encrypted):
+    # Resize encrypted image to match the original's dimensions
+    return cv2.resize(encrypted, (original.shape[1], original.shape[0]))
+
+@app.route('/formulas', methods=['POST'])
+def evaluate_images():
+    if 'original' not in request.files or 'cipher' not in request.files:
+        return jsonify({"error": "Missing original or cipher image"}), 400
+
+    original_file = request.files['original']
+    encrypted_file = request.files['cipher']
+
+    # Read the original and encrypted images
+    original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+    encrypted_image = cv2.imdecode(np.frombuffer(encrypted_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+
+    # Resize encrypted image to match the original's dimensions
+    encrypted_image = resize_images(original_image, encrypted_image)
+
+    # Calculate metrics
+    mse_value = calculate_mse(original_image, encrypted_image)
+    psnr_value = calculate_psnr(original_image, encrypted_image)
+    npcr_value = calculate_npcr(original_image, encrypted_image)
+    uaci_value = calculate_uaci(original_image, encrypted_image)
+
+    # Return the computed metrics as JSON
+    return jsonify({
+        "MSE": mse_value,
+        "PSNR": psnr_value,
+        "NPCR": npcr_value,
+        "UACI": uaci_value
     })
 
 if __name__ == '__main__':
