@@ -1,6 +1,7 @@
 import os
 import io
 import time
+import ast
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,8 +16,7 @@ from scipy.stats import chisquare, pearsonr
 import requests
 from io import BytesIO
 app = Flask(__name__)
-CORS(app, expose_headers=["X-Encryption-Key"])  # Allow access to custom headers
-
+CORS(app, expose_headers=["X-Encryption-Key", "X-Data-Length", "X-Iv"])
 class PrngOscillator:
     def __init__(self):
         self.params = {
@@ -75,7 +75,6 @@ class PrngOscillator:
             state.append(feedback)
         return np.array(lfsr_bits)
 def encrypt_image(image_bytes, key):
-    breakpoint()
     img = Image.open(io.BytesIO(image_bytes))
     img_buffer = io.BytesIO()
     img.save(img_buffer, format=img.format or "PNG")
@@ -86,12 +85,12 @@ def encrypt_image(image_bytes, key):
     iv = os.urandom(16)
     cipher = AES.new(key, AES.MODE_CBC, iv)
     padded_data = pad(data_to_encrypt, AES.block_size)
-    encrypted_data = iv + cipher.encrypt(padded_data)
-    return encrypted_data
+    encrypted_data = cipher.encrypt(padded_data)
+    return encrypted_data,iv
 
-def decrypt_image(encrypted_data, key):
-    breakpoint()
-    iv, ciphertext = encrypted_data[:16], encrypted_data[16:]
+def decrypt_image(encrypted_data, key,iv):
+    ciphertext = encrypted_data
+    iv = ast.literal_eval(iv)
     cipher = AES.new(key, AES.MODE_CBC, iv)
     decrypted_padded = cipher.decrypt(ciphertext)
     decrypted_data = unpad(decrypted_padded, AES.block_size)
@@ -203,7 +202,6 @@ def generate_encryption_key():
 
 @app.route('/encrypt-image', methods=['POST'])
 def encrypt_image_endpoint():
-    breakpoint()
     try:
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
@@ -218,7 +216,7 @@ def encrypt_image_endpoint():
         key_data = key_response 
         key_hex = key_data['key']  
         key = bytes.fromhex(key_hex)
-        encrypted_data = encrypt_image(image_bytes, key)
+        encrypted_data,iv = encrypt_image(image_bytes, key)
         data_length = len(encrypted_data)
 
         length_bytes = data_length.to_bytes(4, byteorder="big")
@@ -240,7 +238,9 @@ def encrypt_image_endpoint():
         print(key.hex())
         # Set custom headers on the response
         response.headers["X-Encryption-Key"] = key.hex()
+        response.headers['X-Iv'] = iv
         response.headers["X-Data-Length"] = str(data_length)
+
         print(response.headers)
 
         return response
@@ -253,9 +253,14 @@ def decrypt_image_endpoint():
     try:
         encrypted_file = request.files['file']
         key_hex = request.form['key']
+        iv = request.form['iv']
         key = bytes.fromhex(key_hex)
-        encrypted_data = encrypted_file.read()
-        decrypted_img, img_format = decrypt_image(encrypted_data, key)
+        encrypted_image = Image.open(encrypted_file)
+        encrypted_pixels = encrypted_image.tobytes()
+        length_bytes = encrypted_pixels[:4]
+        data_length = int.from_bytes(length_bytes, byteorder="big")
+        encrypted_data = encrypted_pixels[4:4 + data_length]
+        decrypted_img, img_format = decrypt_image(encrypted_data, key,iv)
         img_buffer = io.BytesIO()
         decrypted_img.save(img_buffer, format=img_format)
         img_buffer.seek(0)
