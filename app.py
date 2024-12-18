@@ -102,16 +102,19 @@ def decrypt_image(encrypted_data, key,iv):
     return Image.open(io.BytesIO(image_data)), img_format
 
 def compare_images(img1, img2):
-    response = {}
-    response["size"] = f"Image sizes Original: {img1.size}, Decrypted: {img2.size}"
-    original_pixels = list(img1.getdata())
-    decrypted_pixels = list(img2.getdata())
-    response["pixel count"] =f"Pixel count . Original: {len(original_pixels)}, Decrypted: {len(decrypted_pixels)}"
-    mismatches = []
-    for i, (orig_pixel, decrypt_pixel) in enumerate(zip(original_pixels, decrypted_pixels)):
-        if any(abs(o - d) > 10 for o, d in zip(orig_pixel, decrypt_pixel)):
-            mismatches.append((i, orig_pixel, decrypt_pixel))
-    error_msg = f"Found {len(mismatches)} pixel mismatches. "
+    try:
+        response = {}
+        response["size"] = f"Image sizes First: {img1.size}, Second: {img2.size}"
+        original_pixels = list(img1.getdata())
+        decrypted_pixels = list(img2.getdata())
+        response["pixel count"] =f"Pixel count .First : {len(original_pixels)},Second : {len(decrypted_pixels)}"
+        mismatches = []
+        for i, (orig_pixel, decrypt_pixel) in enumerate(zip(original_pixels, decrypted_pixels)):
+            if any(abs(o - d) > 10 for o, d in zip(orig_pixel, decrypt_pixel)):
+                mismatches.append((i, orig_pixel, decrypt_pixel))
+        error_msg = f"Found {len(mismatches)} pixel mismatches. "
+    except:
+        error_msg = "Comparsion not allowed"
     response["mismatch"] = error_msg        
     return response
 
@@ -281,23 +284,30 @@ def correlation_calculation():
     try:
         if 'original_image' not in request.files or 'encrypted_image' not in request.files:
             return jsonify({"error": "Missing original or decrypted image"}), 400
+        try:
+            original_file = request.files['original_image']
+            decrypted_file = request.files['encrypted_image']
         
-        original_file = request.files['original_image']
-        decrypted_file = request.files['encrypted_image']
+            original_img = Image.open(original_file)
+            decrypted_img = Image.open(decrypted_file)
+            decrypted_img = decrypted_img.resize(original_img.size)
+            original_data = np.array(original_img)
+            decrypted_data = np.array(decrypted_img)
         
-        original_img = Image.open(original_file)
-        decrypted_img = Image.open(decrypted_file)
-        decrypted_img = decrypted_img.resize(original_img.size)
-        original_data = np.array(original_img)
-        decrypted_data = np.array(decrypted_img)
+            vert_cor, hor_cor, diag_cor = calculate_image_correlations(original_data, decrypted_data)
         
-        vert_cor, hor_cor, diag_cor = calculate_image_correlations(original_data, decrypted_data)
-        
-        return jsonify({
-            "vertical_correlation": vert_cor,
-            "horizontal_correlation": hor_cor,
-            "diagonal_correlation": diag_cor
-        })
+            return jsonify({
+                "vertical_correlation": vert_cor,
+                "horizontal_correlation": hor_cor,
+                "diagonal_correlation": diag_cor
+            })
+        except:
+            return jsonify({
+                "vertical_correlation": "Not Applicable",
+                "horizontal_correlation": "Not Applicable",
+                "diagonal_correlation": "Not Applicable"
+            })
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -355,6 +365,7 @@ def generate_plot():
     # Read images
     original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
     encrypted_image = cv2.imdecode(np.frombuffer(encrypted_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+    plt.switch_backend('Agg')
 
     # Plot results
     plt.figure(figsize=(15, 10))    
@@ -408,6 +419,7 @@ def plot1():
     Generate scatter plots for adjacent pixel pairs in both original and encrypted images.
     """
     try:
+        breakpoint()
         if 'original_image' not in request.files or 'encrypted_image' not in request.files:
             return jsonify({"error": "Missing original or decrypted image"}), 400
         
