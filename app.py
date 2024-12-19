@@ -4,6 +4,7 @@ import time
 import ast
 import cv2
 import numpy as np
+import json
 import matplotlib.pyplot as plt
 import psutil
 from flask import Flask, request, jsonify, send_file
@@ -243,7 +244,7 @@ def test_encrypt_multiple_keys():
     try:
         if 'original' not in request.files:
             return jsonify({"error": "No original image uploaded"}), 400
-
+        i = 0
         # Retrieve the original image from the request
         original_file = request.files['original']
 
@@ -256,11 +257,11 @@ def test_encrypt_multiple_keys():
         cipher_files = []
 
         with app.test_client() as client:
-            for key in keys:
+            for i,key in enumerate(keys):
                 # Reset the file pointer each time by re-reading the original image
                 original_file.seek(0)  # Reset the file pointer
                 original_file_bytes = io.BytesIO(original_file.read())  # Create a new BytesIO object
-
+                sak = []
                 response = client.post(
                     '/encrypt-image',
                     data={
@@ -272,7 +273,12 @@ def test_encrypt_multiple_keys():
                 if response.status_code == 200:
                     # Save the encrypted image for correlation
                     cipher_file = io.BytesIO(response.data)
+                    iv = response.headers.get("X-Iv")
                     cipher_file.name = f"cipher_{key}.png"
+                    sak.append({
+                        "file_name" : f"cipher-{i}",
+                        "key" : key,
+                    })
                     cipher_files.append(cipher_file)
                 else:
                     continue
@@ -288,11 +294,14 @@ def test_encrypt_multiple_keys():
                 data=files,
                 content_type='multipart/form-data'
             )
-
+            result = response.json
+            final = {}
+            final['cipher_details'] = result
+            final['key_details'] = sak
             if response.status_code != 200:
                 return jsonify({"error": "Correlation computation failed", "details": response.json}), 500
 
-            return jsonify(response.json)
+            return jsonify(final)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -470,7 +479,6 @@ def plot_pixel_distribution(image, title, row_index):
     plt.ylabel("Frequency")
     if title=="Original":
         plt.ylim(0, 3500)  # Set y-axis limit to 3500
-
 @app.route('/plot', methods=['POST'])
 def generate_plot():
     """
