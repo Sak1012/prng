@@ -189,7 +189,114 @@ def key_gen():
     return jsonify({
         "key" : f"{key.hex()}"
     })
+@app.route('/corr-images', methods=['POST'])
+def corr_images_multiple():
+    try:
+        if 'original' not in request.files or 'ciphers' not in request.files:
+            return jsonify({"error": "Missing required files"}), 400
 
+        # Load the original image
+        original = imread(request.files['original'])
+        target_shape = original.shape[:2]
+        original = preprocess_image(original, target_shape)
+        original_gray = rgb2gray(original) if original.ndim == 3 else original
+
+        # Load all cipher images
+        cipher_files = request.files.getlist('ciphers')
+        cipher_images = [
+            preprocess_image(imread(cipher), target_shape)
+            for cipher in cipher_files
+        ]
+        cipher_grays = [
+            rgb2gray(cipher) if cipher.ndim == 3 else cipher
+            for cipher in cipher_images
+        ]
+
+        # Compute correlations
+        correlations = []
+
+        # Original vs. all ciphers
+        for i, cipher_gray in enumerate(cipher_grays):
+            corr = calculate_correlation(original_gray, cipher_gray)
+            correlations.append({
+                "pair": f"original-cipher{i+1}",
+                "correlation": round(corr, 5)
+            })
+
+        # Cipher vs. Cipher
+        for i in range(len(cipher_grays)):
+            for j in range(i + 1, len(cipher_grays)):
+                corr = calculate_correlation(cipher_grays[i], cipher_grays[j])
+                correlations.append({
+                    "pair": f"cipher{i+1}-cipher{j+1}",
+                    "correlation": round(corr, 5)
+                })
+
+        # Prepare response
+        return jsonify(correlations)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/multimage-corr', methods=['POST'])
+def test_encrypt_multiple_keys():
+    try:
+        if 'original' not in request.files:
+            return jsonify({"error": "No original image uploaded"}), 400
+
+        # Retrieve the original image from the request
+        original_file = request.files['original']
+
+        keys = []
+        for _ in range(5):
+            key_resp = generate_encryption_key()
+            key_hex =key_resp['key']  
+            key = bytes.fromhex(key_hex)
+            keys.append(f"{key.hex()}")        
+        cipher_files = []
+
+        with app.test_client() as client:
+            for key in keys:
+                # Reset the file pointer each time by re-reading the original image
+                original_file.seek(0)  # Reset the file pointer
+                original_file_bytes = io.BytesIO(original_file.read())  # Create a new BytesIO object
+
+                response = client.post(
+                    '/encrypt-image',
+                    data={
+                        'key': key,
+                        'image': (original_file_bytes, original_file.filename)
+                    },
+                    content_type='multipart/form-data'
+                )
+                if response.status_code == 200:
+                    # Save the encrypted image for correlation
+                    cipher_file = io.BytesIO(response.data)
+                    cipher_file.name = f"cipher_{key}.png"
+                    cipher_files.append(cipher_file)
+                else:
+                    continue
+            # Send original and encrypted images to /corr-images
+            original_file.seek(0)  # Reset the file pointer for original file again
+            # Send original and encrypted images to /corr-images
+            files = {
+                'original': (original_file, original_file.filename),
+                'ciphers': [(cf, cf.name) for cf in cipher_files]
+            }
+            response = client.post(
+                '/corr-images',
+                data=files,
+                content_type='multipart/form-data'
+            )
+
+            if response.status_code != 200:
+                return jsonify({"error": "Correlation computation failed", "details": response.json}), 500
+
+            return jsonify(response.json)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
 @app.route('/encrypt-image', methods=['POST'])
 def encrypt_image_endpoint():
     try:
