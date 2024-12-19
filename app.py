@@ -193,10 +193,11 @@ def key_gen():
 @app.route('/encrypt-image', methods=['POST'])
 def encrypt_image_endpoint():
     try:
+        breakpoint()
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
         
-        image_file = request.files['image']
+        image_file = request.files["image"]
         key = request.form["key"]  
         image_bytes = image_file.read() 
         hex_int = int(key, 16) 
@@ -236,15 +237,14 @@ def encrypt_image_endpoint():
 @app.route('/decrypt-image', methods=['POST'])
 def decrypt_image_endpoint():
     try:
-        breakpoint()
         encrypted_file = request.files['file']
         key_hex = request.form['key']
         print(key_hex)
         iv = request.form['iv']
-        hex_int = int(key, 16) 
+        hex_int = int(key_hex, 16) 
         new_int = hex_int + 0x200
         key = hex(new_int)[2:] 
-        key = bytes.fromhex(key_hex)
+        key = bytes.fromhex(key)
         encrypted_image = Image.open(encrypted_file)
         encrypted_pixels = encrypted_image.tobytes()
         length_bytes = encrypted_pixels[:4]
@@ -300,16 +300,18 @@ def image_correlations():
     Output: JSON with correlation coefficients for both images
     """
     # Check if both images are provided
-    if 'original' not in request.files or 'cipher' not in request.files:
+    if 'original' not in request.files or 'cipher' not in request.files or 'decrypted' not in request.files:
         return jsonify({"error": "Both 'original' and 'cipher' images must be provided"}), 400
 
     # Load images
     original_file = request.files['original']
     cipher_file = request.files['cipher']
+    decrypted = request.files['decrypted']
     
     try:
         original_image = imread(original_file)
         cipher_image = imread(cipher_file)
+        decrypt_file = imread(decrypted)
     except Exception as e:
         return jsonify({"error": f"Failed to read images: {str(e)}"}), 400
 
@@ -317,11 +319,13 @@ def image_correlations():
         # Calculate correlations for each image
         original_results = calculate_directions_correlation(original_image)
         cipher_results = calculate_directions_correlation(cipher_image)
-        
+        decrypt_result = calculate_directions_correlation(decrypt_file)
+
         # Prepare and return the response
         response = {
                 "original": original_results,
-                "cipher": cipher_results
+                "cipher": cipher_results,
+                "decrypted" : decrypt_result 
         }
         return jsonify(response)
     except Exception as e:
@@ -546,8 +550,10 @@ def image_stats():
     # Compute values
     correlation_plain_cipher = calculate_correlation(original_gray, cipher_gray)
     correlation_plain_decrypted = calculate_correlation(original_gray, decrypted_gray)
+    correlation_cipher_decrypted = calculate_correlation(cipher_gray, decrypted_gray)
     entropy_plain = calculate_entropy(original_gray)
     entropy_cipher = calculate_entropy(cipher_gray)
+    entropy_decrypted = calculate_entropy(decrypted_gray)
 
     # Prepare response
     response = {
@@ -555,7 +561,9 @@ def image_stats():
         "cc_plainvcipher": round(correlation_plain_cipher, 5),
         "e_plain": round(entropy_plain, 4),
         "e_cipher": round(entropy_cipher, 4),
-        "cc_plainvsdecrypt": round(correlation_plain_decrypted, 5)
+        "e_decrypted": round(entropy_decrypted, 4),
+        "cc_plainvsdecrypt": round(correlation_plain_decrypted, 5),
+        "cc_ciphervsdecrypt": round(correlation_cipher_decrypted, 5)
     }
 
     return jsonify(response)
