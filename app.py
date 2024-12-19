@@ -255,13 +255,12 @@ def test_encrypt_multiple_keys():
             key = bytes.fromhex(key_hex)
             keys.append(f"{key.hex()}")        
         cipher_files = []
-
+        sak = []
         with app.test_client() as client:
             for i,key in enumerate(keys):
                 # Reset the file pointer each time by re-reading the original image
                 original_file.seek(0)  # Reset the file pointer
                 original_file_bytes = io.BytesIO(original_file.read())  # Create a new BytesIO object
-                sak = []
                 response = client.post(
                     '/encrypt-image',
                     data={
@@ -273,10 +272,9 @@ def test_encrypt_multiple_keys():
                 if response.status_code == 200:
                     # Save the encrypted image for correlation
                     cipher_file = io.BytesIO(response.data)
-                    iv = response.headers.get("X-Iv")
-                    cipher_file.name = f"cipher_{key}.png"
+                    cipher_file.name = f"cipher_{i}.png"
                     sak.append({
-                        "file_name" : f"cipher-{i}",
+                        "file_name" :  cipher_file.name,
                         "key" : key,
                     })
                     cipher_files.append(cipher_file)
