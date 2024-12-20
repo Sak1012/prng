@@ -175,14 +175,14 @@ def generate_encryption_key():
         random_bits = mhho_prng.generate_prng_bits(trajectory)
         lfsr_bits = mhho_prng.lfsr_post_processing(random_bits)
         
-        entropy = os.urandom(32)
+        entropy = os.urandom(16)
         entropy_bits = np.frombuffer(entropy, dtype=np.uint8).reshape(-1) % 2
-        extended_entropy_bits = np.tile(entropy_bits, 8)[:256]
+        extended_entropy_bits = np.tile(entropy_bits, 8)[:128]
         
         mixed_bits = (lfsr_bits + extended_entropy_bits) % 2
         
         key = bytes(
-            int("".join(map(str, mixed_bits[i : i + 8])), 2) for i in range(0, 256, 8)
+            int("".join(map(str, mixed_bits[i : i + 8])), 2) for i in range(0, 128, 8)
         )
         
         return {
@@ -194,6 +194,7 @@ def generate_encryption_key():
 @app.route("/generate-key")
 def key_gen():
     key_resp = generate_encryption_key()
+    breakpoint()
     key_hex =key_resp['key']  
     key = bytes.fromhex(key_hex)
     return jsonify({
