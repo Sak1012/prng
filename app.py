@@ -194,7 +194,6 @@ def generate_encryption_key():
 @app.route("/generate-key")
 def key_gen():
     key_resp = generate_encryption_key()
-    breakpoint()
     key_hex =key_resp['key']  
     key = bytes.fromhex(key_hex)
     return jsonify({
@@ -230,7 +229,7 @@ def corr_images_multiple():
         for i, cipher_gray in enumerate(cipher_grays):
             corr = calculate_correlation(original_gray, cipher_gray)
             correlations.append({
-                "pair": f"original-cipher{i+1}",
+                "pair": f"original-cipher{i}",
                 "correlation": round(corr, 5)
             })
 
@@ -239,7 +238,7 @@ def corr_images_multiple():
             for j in range(i + 1, len(cipher_grays)):
                 corr = calculate_correlation(cipher_grays[i], cipher_grays[j])
                 correlations.append({
-                    "pair": f"cipher{i+1}-cipher{j+1}",
+                    "pair": f"cipher{i}-cipher{j}",
                     "correlation": round(corr, 5)
                 })
 
@@ -282,7 +281,7 @@ def test_encrypt_multiple_keys():
                 if response.status_code == 200:
                     # Save the encrypted image for correlation
                     cipher_file = io.BytesIO(response.data)
-                    cipher_file.name = f"cipher_{i+1}.png"
+                    cipher_file.name = f"cipher_{i}.png"
                     sak.append({
                         "file_name" :  cipher_file.name,
                         "key" : key,
@@ -711,9 +710,9 @@ def calculate_variance():
 
     # Return the results as a JSON response
     return jsonify({
-        "histogram_variance_plaintext": var_plaintext,
-        "histogram_variance_ciphertext": var_ciphertext,
-        "variance_reduction": variance_reduction * 100
+        "histogram_original": "{:.2f}".format(var_plaintext),
+        "histogram_cipher": "{:.2f}".format(var_ciphertext),
+        "variance_reduction": "{:.2f}".format(variance_reduction * 100)
     })
 
 @app.route('/compare-images', methods=['POST'])
