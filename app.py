@@ -281,7 +281,7 @@ def test_encrypt_multiple_keys():
                 if response.status_code == 200:
                     # Save the encrypted image for correlation
                     cipher_file = io.BytesIO(response.data)
-                    cipher_file.name = f"cipher_{i}.png"
+                    cipher_file.name = f"cipher_{i+1}.png"
                     sak.append({
                         "file_name" :  cipher_file.name,
                         "key" : key,
@@ -316,7 +316,6 @@ def test_encrypt_multiple_keys():
 @app.route('/encrypt-image', methods=['POST'])
 def encrypt_image_endpoint():
     try:
-        breakpoint()
         if 'image' not in request.files:
             return jsonify({"error": "No image uploaded"}), 400
         
@@ -488,39 +487,104 @@ def plot_pixel_distribution(image, title, row_index):
     plt.ylabel("Frequency")
     if title=="Original":
         plt.ylim(0, 3500)  # Set y-axis limit to 3500
+
 @app.route('/plot', methods=['POST'])
 def generate_plot():
     """
-    Generate the plot for the original and encrypted images.
-    Accepts two images via POST request as 'original_image' and 'encrypted_image'.
+    Generate histograms for the original and encrypted images, including RGB and grayscale histograms.
+    Displays original and encrypted images as well.
     """
     if 'original' not in request.files or 'cipher' not in request.files:
         return jsonify({"error": "Missing original or decrypted image"}), 400
-    
+
     original_file = request.files['original']
     encrypted_file = request.files['cipher']
-        
+
     # Read images
-    original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
-    encrypted_image = cv2.imdecode(np.frombuffer(encrypted_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+    original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_COLOR)
+    encrypted_image = cv2.imdecode(np.frombuffer(encrypted_file.read(), np.uint8), cv2.IMREAD_COLOR)
+
     plt.switch_backend('Agg')
+    plt.figure(figsize=(18, 12))
 
-    # Plot results
-    plt.figure(figsize=(15, 10))    
-
-    # Original image
-    plt.subplot(2, 3, 1)
-    plt.imshow(original_image, cmap='gray')
+    # Original Image Display
+    plt.subplot(3, 4, 1)
+    plt.imshow(cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB))
     plt.title("Original Image")
     plt.axis("off")
-    plot_pixel_distribution(original_image, "Original", 0)
 
-    # Encrypted image
-    plt.subplot(2, 3, 4)
-    plt.imshow(encrypted_image, cmap='gray')
+    # Original RGB Histogram
+    plt.subplot(3, 4, 2)
+    plt.title("Original RGB Histogram")
+    for i, color in enumerate(['red', 'green', 'blue']):
+        hist = cv2.calcHist([original_image], [i], None, [256], [0, 256])
+        plt.fill_between(range(256), hist.ravel(), color=color, alpha=0.5)
+    plt.xlim([0, 256])
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Frequency")
+
+    # Original Red Histogram
+    plt.subplot(3, 4, 3)
+    plt.title("Original Red Channel")
+    red_hist = cv2.calcHist([original_image], [2], None, [256], [0, 256])
+    plt.fill_between(range(256), red_hist.ravel(), color="red", alpha=0.7)
+    plt.xlim([0, 256])
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Frequency")
+
+    # Original Green Histogram
+    plt.subplot(3, 4, 4)
+    plt.title("Original Green Channel")
+    green_hist = cv2.calcHist([original_image], [1], None, [256], [0, 256])
+    plt.fill_between(range(256), green_hist.ravel(), color="green", alpha=0.7)
+    plt.xlim([0, 256])
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Frequency")
+
+    # Original Blue Histogram
+    plt.subplot(3, 4, 5)
+    plt.title("Original Blue Channel")
+    blue_hist = cv2.calcHist([original_image], [0], None, [256], [0, 256])
+    plt.fill_between(range(256), blue_hist.ravel(), color="blue", alpha=0.7)
+    plt.xlim([0, 256])
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Frequency")
+
+    # Original Grayscale Histogram
+    plt.subplot(3, 4, 6)
+    original_gray = cv2.cvtColor(original_image, cv2.COLOR_BGR2GRAY)
+    plt.title("Original Grayscale Histogram")
+    gray_hist = cv2.calcHist([original_gray], [0], None, [256], [0, 256])
+    plt.fill_between(range(256), gray_hist.ravel(), color="black", alpha=0.5)
+    plt.xlim([0, 256])
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Frequency")
+
+    # Encrypted Image Display
+    plt.subplot(3, 4, 7)
+    plt.imshow(cv2.cvtColor(encrypted_image, cv2.COLOR_BGR2RGB))
     plt.title("Encrypted Image")
     plt.axis("off")
-    plot_pixel_distribution(encrypted_image, "Encrypted", 1)
+
+    # Encrypted RGB Histogram
+    plt.subplot(3, 4, 8)
+    plt.title("Encrypted RGB Histogram")
+    for i, color in enumerate(['red', 'green', 'blue']):
+        hist = cv2.calcHist([encrypted_image], [i], None, [256], [0, 256])
+        plt.fill_between(range(256), hist.ravel(), color=color, alpha=0.5)
+    plt.xlim([0, 256])
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Frequency")
+
+    # Encrypted Grayscale Histogram
+    plt.subplot(3, 4, 9)
+    encrypted_gray = cv2.cvtColor(encrypted_image, cv2.COLOR_BGR2GRAY)
+    plt.title("Encrypted Grayscale Histogram")
+    gray_hist = cv2.calcHist([encrypted_gray], [0], None, [256], [0, 256])
+    plt.fill_between(range(256), gray_hist.ravel(), color="black", alpha=0.5)
+    plt.xlim([0, 256])
+    plt.xlabel("Pixel Value")
+    plt.ylabel("Frequency")
 
     plt.tight_layout()
 
@@ -532,7 +596,6 @@ def generate_plot():
 
     # Return the plot as an image response
     return send_file(buffer, mimetype='image/png')
-
 
 def get_adjacent_pixel_pairs(image, axis=1):
     """
@@ -565,23 +628,33 @@ def plot1():
         encrypted_file = request.files['cipher']
         original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
         encrypted_image = cv2.imdecode(np.frombuffer(encrypted_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+        
         original_horizontal_x, original_horizontal_y = get_adjacent_pixel_pairs(original_image, axis=1)
         encrypted_horizontal_x, encrypted_horizontal_y = get_adjacent_pixel_pairs(encrypted_image, axis=1)
-        plt.figure(figsize=(10, 5))
+        
+        # Create the figure and axes
+        plt.figure(figsize=(12, 6))  # Larger figure size
+        plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)  # Adjust layout
+        
+        # Original Image Scatter Plot
         plt.subplot(1, 2, 1)
-        plt.scatter(original_horizontal_x, original_horizontal_y, s=1, color='purple')
-        plt.title("Original Image: Adjacent Pixels")
-        plt.xlabel("Pixel gray value on location (x,y)")
-        plt.ylabel("Pixel gray value on location (x+1, y)")
+        plt.scatter(original_horizontal_x, original_horizontal_y, s=10, color='orangered', alpha=0.7)
+        plt.title("Original Image: Adjacent Pixels", fontsize=16, fontweight='bold')
+        plt.xlabel("Pixel Gray Value at (x, y)", fontsize=12)
+        plt.ylabel("Pixel Gray Value at (x+1, y)", fontsize=12)
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+        plt.gca().set_facecolor('#f4f4f9')  # Light background for the subplot
 
-        # Scatter plot for encrypted image
+        # Encrypted Image Scatter Plot
         plt.subplot(1, 2, 2)
-        plt.scatter(encrypted_horizontal_x, encrypted_horizontal_y, s=1, color='purple')
-        plt.title("Encrypted Image: Adjacent Pixels")
-        plt.xlabel("Pixel gray value on location (x,y)")
-        plt.ylabel("Pixel gray value on location (x+1, y)")
+        plt.scatter(encrypted_horizontal_x, encrypted_horizontal_y, s=10, color='darkviolet', alpha=0.7)
+        plt.title("Encrypted Image: Adjacent Pixels", fontsize=16, fontweight='bold')
+        plt.xlabel("Pixel Gray Value at (x, y)", fontsize=12)
+        plt.ylabel("Pixel Gray Value at (x+1, y)", fontsize=12)
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+        plt.gca().set_facecolor('#f4f4f9')  # Light background for the subplot
 
-        plt.tight_layout()
+        plt.tight_layout()  # Adjust layout to avoid overlap
 
         # Save the plot to a buffer
         plot_buffer = io.BytesIO()
