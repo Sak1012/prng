@@ -1,10 +1,9 @@
 import os
 import io
-import time
 import ast
+import math
 import cv2
 import numpy as np
-import json
 import matplotlib.pyplot as plt
 import psutil
 from flask import Flask, request, jsonify, send_file
@@ -18,10 +17,9 @@ from skimage.io import imread
 from skimage.color import rgb2gray
 from skimage.util import img_as_ubyte
 from skimage.transform import resize
-import requests
 from io import BytesIO
 app = Flask(__name__)
-CORS(app, expose_headers=["X-Encryption-Key", "X-Data-Length", "X-Iv"])
+CORS(app, expose_headers=["X-Width", "X-Height","X-Data-Length", "X-Iv"])
 class PrngOscillator:
     def __init__(self):
         self.params = {
@@ -80,18 +78,29 @@ class PrngOscillator:
             state.append(feedback)
         return np.array(lfsr_bits)
 def encrypt_image(image_bytes, key):
+    # Open the image
     img = Image.open(io.BytesIO(image_bytes))
+    
+    # Convert the image into a byte array
     img_buffer = io.BytesIO()
     img.save(img_buffer, format=img.format or "PNG")
     image_bytes = img_buffer.getvalue()
+    
+    # Add the image format as part of the encryption data
     img_format = img.format or "PNG"
     format_bytes = img_format.encode("utf-8")
     data_to_encrypt = len(format_bytes).to_bytes(1, "big") + format_bytes + image_bytes
+    
     iv = os.urandom(16)
+    
     cipher = AES.new(key, AES.MODE_CBC, iv)
+    
     padded_data = pad(data_to_encrypt, AES.block_size)
+    
     encrypted_data = cipher.encrypt(padded_data)
-    return encrypted_data,iv
+    
+    return encrypted_data, iv
+
 
 def decrypt_image(encrypted_data, key,iv):
     ciphertext = encrypted_data
@@ -166,14 +175,14 @@ def generate_encryption_key():
         random_bits = mhho_prng.generate_prng_bits(trajectory)
         lfsr_bits = mhho_prng.lfsr_post_processing(random_bits)
         
-        entropy = os.urandom(16)
+        entropy = os.urandom(32)
         entropy_bits = np.frombuffer(entropy, dtype=np.uint8).reshape(-1) % 2
-        extended_entropy_bits = np.tile(entropy_bits, 8)[:128]
+        extended_entropy_bits = np.tile(entropy_bits, 8)[:256]
         
         mixed_bits = (lfsr_bits + extended_entropy_bits) % 2
         
         key = bytes(
-            int("".join(map(str, mixed_bits[i : i + 8])), 2) for i in range(0, 128, 8)
+            int("".join(map(str, mixed_bits[i : i + 8])), 2) for i in range(0, 256, 8)
         )
         
         return {
@@ -323,11 +332,11 @@ def encrypt_image_endpoint():
 
         length_bytes = data_length.to_bytes(4, byteorder="big")
         combined_data = length_bytes + encrypted_data
-
-        width = 1080
-        height = (len(combined_data) + width - 1) // width
-        encrypted_pixels = list(combined_data) + [0] * (width * height - len(combined_data))  # Pad with zeros
-        encrypted_image = Image.frombytes("L", (width, height), bytes(encrypted_pixels))
+        total_pixels = len(combined_data)
+        width = math.ceil(math.sqrt(total_pixels))
+        height = (total_pixels + width - 1) // width  # Ensure all pixels fit
+        padded_data = list(combined_data) + [0] * (width * height - len(combined_data))
+        encrypted_image = Image.frombytes("L", (width, height), bytes(padded_data))
         image_buffer = io.BytesIO()
         encrypted_image.save(image_buffer, format="PNG")
         image_buffer.seek(0)
@@ -340,6 +349,8 @@ def encrypt_image_endpoint():
         print(key.hex())
         response.headers['X-Iv'] = iv
         response.headers["X-Data-Length"] = str(data_length)
+        response.headers["X-Width"] = str(width)
+        response.headers["X-Height"] = str(height)
 
         print(response.headers)
 
@@ -582,6 +593,54 @@ def plot1():
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+def calculate_histogram(image):
+    # Calculate the histogram of the image (256 bins for grayscale)
+    hist = cv2.calcHist([image], [0], None, [256], [0, 256])
+    hist = hist.flatten()  # Convert histogram to 1D array
+    return hist
+
+def histogram_variance(histogram):
+    G = 256  # Number of gray levels
+    variance = 0
+    # Calculate the variance as defined in the formula
+    for i in range(G):
+        for j in range(G):
+            variance += 0.5 * (histogram[i] - histogram[j])**2
+    
+    variance /= G**2
+    return variance
+
+def calculate_variance_reduction(var_plaintext, var_ciphertext):
+    # Calculate the variance reduction ratio
+    return (var_plaintext - var_ciphertext) / var_plaintext
+
+@app.route('/calculate_variance', methods=['POST'])
+def calculate_variance():
+    # Get the uploaded images from the request
+    plaintext_file = request.files['original']
+    ciphertext_file = request.files['cipher']
+    
+    # Read the images as grayscale
+    plaintext_image = cv2.imdecode(np.frombuffer(plaintext_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+    ciphertext_image = cv2.imdecode(np.frombuffer(ciphertext_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+
+    # Calculate histograms for both images
+    hist_plaintext = calculate_histogram(plaintext_image)
+    hist_ciphertext = calculate_histogram(ciphertext_image)
+
+    # Calculate histogram variance for both images
+    var_plaintext = histogram_variance(hist_plaintext)
+    var_ciphertext = histogram_variance(hist_ciphertext)
+
+    # Calculate variance reduction
+    variance_reduction = calculate_variance_reduction(var_plaintext, var_ciphertext)
+
+    # Return the results as a JSON response
+    return jsonify({
+        "histogram_variance_plaintext": var_plaintext,
+        "histogram_variance_ciphertext": var_ciphertext,
+        "variance_reduction": variance_reduction * 100
+    })
 
 @app.route('/compare-images', methods=['POST'])
 def compare_images_endpoint():
