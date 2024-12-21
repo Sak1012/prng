@@ -597,11 +597,12 @@ def generate_plot():
     # Return the plot as an image response
     return send_file(buffer, mimetype='image/png')
 
-def get_adjacent_pixel_pairs(image, axis=1):
+def get_adjacent_pixel_pairs(image, axis=1, num_pairs=None):
     """
-    Extract adjacent pixel pairs for scatter plotting.
+    Extract adjacent pixel pairs for scatter plotting, with optional random sampling.
     :param image: 2D numpy array (grayscale image)
     :param axis: Direction of adjacent pixels (1 for horizontal, 0 for vertical)
+    :param num_pairs: Number of random adjacent pixel pairs to return (default: None, returns all pairs)
     :return: Two lists of pixel intensities
     """
     if axis == 1:  # Horizontal adjacent pixels
@@ -612,6 +613,13 @@ def get_adjacent_pixel_pairs(image, axis=1):
         y = image[1:, :].flatten()
     else:
         raise ValueError("Invalid axis. Use 0 for vertical or 1 for horizontal.")
+    
+    # Random sampling of pairs if num_pairs is specified
+    if num_pairs and len(x) > num_pairs:
+        indices = np.random.choice(len(x), size=num_pairs, replace=False)
+        x = x[indices]
+        y = y[indices]
+
     return x, y
 
 @app.route('/plot1', methods=['POST'])
@@ -629,30 +637,27 @@ def plot1():
         original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
         encrypted_image = cv2.imdecode(np.frombuffer(encrypted_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
         
-        original_horizontal_x, original_horizontal_y = get_adjacent_pixel_pairs(original_image, axis=1)
-        encrypted_horizontal_x, encrypted_horizontal_y = get_adjacent_pixel_pairs(encrypted_image, axis=1)
-        
+        original_horizontal_x, original_horizontal_y = get_adjacent_pixel_pairs(original_image, axis=1, num_pairs=2000)
+        encrypted_horizontal_x, encrypted_horizontal_y = get_adjacent_pixel_pairs(encrypted_image, axis=1, num_pairs=2000)
         # Create the figure and axes
         plt.figure(figsize=(12, 6))  # Larger figure size
         plt.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)  # Adjust layout
         
         # Original Image Scatter Plot
         plt.subplot(1, 2, 1)
-        plt.scatter(original_horizontal_x, original_horizontal_y, s=10, color='orangered', alpha=0.7)
+        plt.scatter(original_horizontal_x, original_horizontal_y, s=1, color='orangered', alpha=0.5)
         plt.title("Original Image: Adjacent Pixels", fontsize=16, fontweight='bold')
         plt.xlabel("Pixel Gray Value at (x, y)", fontsize=12)
         plt.ylabel("Pixel Gray Value at (x+1, y)", fontsize=12)
         plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-        plt.gca().set_facecolor('#f4f4f9')  # Light background for the subplot
 
         # Encrypted Image Scatter Plot
         plt.subplot(1, 2, 2)
-        plt.scatter(encrypted_horizontal_x, encrypted_horizontal_y, s=10, color='darkviolet', alpha=0.7)
+        plt.scatter(encrypted_horizontal_x, encrypted_horizontal_y, s=1, color='darkviolet', alpha=0.5)
         plt.title("Encrypted Image: Adjacent Pixels", fontsize=16, fontweight='bold')
         plt.xlabel("Pixel Gray Value at (x, y)", fontsize=12)
         plt.ylabel("Pixel Gray Value at (x+1, y)", fontsize=12)
         plt.grid(True, which='both', linestyle='--', linewidth=0.5)
-        plt.gca().set_facecolor('#f4f4f9')  # Light background for the subplot
 
         plt.tight_layout()  # Adjust layout to avoid overlap
 
@@ -666,6 +671,7 @@ def plot1():
     
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 def calculate_histogram(image):
     # Calculate the histogram of the image (256 bins for grayscale)
     hist = cv2.calcHist([image], [0], None, [256], [0, 256])
@@ -835,6 +841,53 @@ def corr_images():
         "cc_plainvcipher": round(correlation_plain_cipher, 5),
     }
     return jsonify(response)
+
+def calculate_data_loss(original, decrypted, threshold=0):
+    """
+    Calculate the data loss percentage between the original and decrypted images.
+    :param original: Original image as a NumPy array.
+    :param decrypted: Decrypted image as a NumPy array.
+    :param threshold: Threshold for considering pixel values as "different".
+    :return: Data loss percentage.
+    """
+    if original.shape != decrypted.shape:
+        raise ValueError("Original and decrypted images must have the same dimensions.")
+    
+    # Calculate pixel differences
+    diff = np.abs(original.astype(np.int16) - decrypted.astype(np.int16))
+    
+    # Count pixels above the threshold
+    different_pixels = np.sum(diff > threshold)
+    print(different_pixels) 
+    # Total number of pixels
+    total_pixels = original.size
+    
+    # Calculate data loss percentage
+    data_loss_percentage = (different_pixels / total_pixels) * 100
+    return data_loss_percentage
+
+@app.route('/data_loss', methods=['POST'])
+def data_loss():
+    """
+    Calculate the data loss percentage between original and decrypted images.
+    """
+    try:
+        if 'original' not in request.files or 'decrypted' not in request.files:
+            return jsonify({"error": "Missing original or decrypted image"}), 400
+        
+        # Read images
+        original_file = request.files['original']
+        decrypted_file = request.files['decrypted']
+        original_image = cv2.imdecode(np.frombuffer(original_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+        decrypted_image = cv2.imdecode(np.frombuffer(decrypted_file.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+
+        # Calculate data loss percentage
+        data_loss_percentage = calculate_data_loss(original_image, decrypted_image)
+        
+        return jsonify({"data_loss_percentage": data_loss_percentage}), 200
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 def calculate_mse(original, encrypted):
     return np.mean((original.astype("float") - encrypted.astype("float")) ** 2)
